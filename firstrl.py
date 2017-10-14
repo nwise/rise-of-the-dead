@@ -2,6 +2,7 @@ import libtcodpy as libtcod
 import shelve
 import math
 import textwrap
+import logging
 from tile import Tile 
 from rect import Rect
 
@@ -60,7 +61,7 @@ color_light_ground = libtcod.Color(200, 180, 50)
 class Object:
     #this is a generic object: the player, a monster, an item, the stairs...
     #it's always represented by a character on screen.
-    def __init__(self, x, y, char, name, color, blocks=False, always_visible=False, fighter=None, ai=None, item=None):
+    def __init__(self, x, y, char, name, color, equipment=None, blocks=False, always_visible=False, fighter=None, ai=None, item=None):
         self.x = x
         self.y = y
         self.char = char
@@ -78,6 +79,13 @@ class Object:
 
         self.item = item
         if self.item:  #let the Item component know who owns it
+            self.item.owner = self
+
+        self.equipment = equipment
+        if self.equipment:
+            self.equipment.owner = self
+
+            self.item = Item()
             self.item.owner = self
  
     def move(self, dx, dy):
@@ -106,6 +114,7 @@ class Object:
  
     def distance(self, x, y):
         return math.sqrt((x - self.x) ** 2 + (y - self.y) ** 2)
+
     def send_to_back(self):
         #make this object be drawn first, so all others appear above it if they're in the same tile.
         global objects
@@ -129,6 +138,10 @@ class Item:
 
     def use(self):
         #just call the "use_function" if it is defined
+        if self.owner.equipment:
+            self.owner.equipment.toggle_equip()
+            return
+
         if self.use_function is None:
             message('The ' + self.owner.name + ' cannot be used.')
         else:
@@ -144,24 +157,71 @@ class Item:
             inventory.append(self.owner)
             objects.remove(self.owner)
             message('You picked up a ' + self.owner.name + '!', libtcod.green) 
+            equipment = self.owner.equipment
+            if equipment and get_equipped_in_slot(equipment.slot) is None:
+                equipment.equip()
     
     def drop(self):
         objects.append(self.owner)
         inventory.remove(self.owner)
         self.owner.x = player.x
         self.owner.y = player.y
+        if self.owner.equipment:
+            self.owner.equipment.dequip()
 
         message('You dropped a ' + self.owner.name + '.', libtcod.yellow)
+
+class Equipment:
+    def __init__(self, slot, power_bonus=0, defense_bonus=0, max_hp_bonus=0):
+        self.slot = slot
+        self.is_equipped = False
+        self.power_bonus = power_bonus
+        self.defense_bonus = defense_bonus
+        self.max_hp_bonus = max_hp_bonus
+
+    def toggle_equip(self):
+        if self.is_equipped:
+            self.dequip()
+        else:
+            self.equip()
+
+    def equip(self):
+        old_equipment = get_equipped_in_slot(self.slot)
+        if old_equipment is not None:
+            old_equipment.dequip()
+        self.is_equipped = True
+        message('Equipped ' + self.owner.name + ' on ' + self.slot + '.', libtcod.light_green)
+
+    def dequip(self):
+        if not self.is_equipped: return
+        self.is_equipped = False
+        message('Unequipped ' + self.owner.name + ' from ' + self.slot + '.', libtcod.light_yellow)
 
 class Fighter:
     #combat-related properties and methods (monster, player, NPC).
     def __init__(self, hp, defense, power, xp, death_function=None):
-        self.max_hp = hp
         self.hp = hp
-        self.defense = defense
-        self.power = power
-        self.death_function = death_function
         self.xp = xp
+
+        self.base_max_hp = hp
+        self.base_defense = defense
+        self.base_power = power
+        self.death_function = death_function
+
+    @property
+    def power(self):
+        bonus = sum(equipment.power_bonus for equipment in get_all_equipped(self.owner))
+        return self.base_power + bonus
+
+    @property
+    def defense(self):
+        bonus = sum(equipment.defense_bonus for equipment in get_all_equipped(self.owner))
+        return self.base_defense + bonus
+
+    @property
+    def max_hp(self):
+        bonus = sum(equipment.max_hp_bonus for equipment in get_all_equipped(self.owner))
+        return self.base_max_hp + bonus
  
     def attack(self, target):
         #a simple formula for attack damage
@@ -199,11 +259,10 @@ class BasicMonster:
         #a basic monster takes its turn. if you can see it, it can see you
         monster = self.owner
         if libtcod.map_is_in_fov(fov_map, monster.x, monster.y):
- 
+
             #move towards player if far away
             if monster.distance_to(player) >= 2:
                 monster.move_towards(player.x, player.y)
- 
             #close enough, attack! (if the player is still alive.)
             elif player.fighter.hp > 0:
                 monster.fighter.attack(player)
@@ -220,6 +279,22 @@ class ConfusedMonster:
         else:
             self.owner.ai = self.old_ai
             message('The ' + self.owner.name + ' is no longer confused!', libtcod.red)
+
+def get_equipped_in_slot(slot):
+    for obj in inventory:
+        if obj.equipment and obj.equipment.slot == slot and obj.equipment.is_equipped:
+            return obj.equipment
+    return None
+
+def get_all_equipped(obj):  #returns a list of equipped items
+    if obj == player:
+        equipped_list = []
+        for item in inventory:
+            if item.equipment and item.equipment.is_equipped:
+                equipped_list.append(item.equipment)
+        return equipped_list
+    else:
+        return []  #other objects have no equipment
 
 def is_blocked(x, y):
     #first test the map tile
@@ -269,8 +344,10 @@ def place_objects(room):
     item_chances = {}
     item_chances['heal'] = 35  #healing potion always shows up, even if all other items have 0 chance
     item_chances['lightning'] = from_dungeon_level([[25, 4]])
-    item_chances['fireball'] =  from_dungeon_level([[25, 6]])
-    item_chances['confuse'] =   from_dungeon_level([[10, 2]])
+    item_chances['fireball'] = from_dungeon_level([[25, 6]])
+    item_chances['confuse'] = from_dungeon_level([[10, 2]])
+    item_chances['sword'] = from_dungeon_level([[5, 4]])
+    item_chances['shield'] = from_dungeon_level([[15, 8]])
 
     #choose random number of monsters
     num_monsters = libtcod.random_get_int(0, 0, max_monsters)
@@ -317,7 +394,13 @@ def place_objects(room):
             elif choice == 'fireball':
                 item_component = Item(use_function=cast_fireball)
                 item = Object(x, y, '#', 'scroll of fireball', libtcod.light_yellow, item=item_component)
-            else:
+            elif choice == 'sword':
+                equipment_component = Equipment(slot='right hand', power_bonus=5)
+                item = Object(x, y, '/', 'sword', libtcod.sky, equipment=equipment_component)
+            elif choice == 'shield':
+                equipment_component = Equipment(slot='left hand', defense_bonus=2)
+                item = Object(x, y, '[', 'shield', libtcod.darker_orange, equipement=equipment_componet)
+            elif choice == 'confuse':
                 item_component = Item(use_function=cast_confuse)
                 item = Object(x, y, '#', 'scroll of confusion', libtcod.light_yellow, item=item_component)
  
@@ -565,7 +648,7 @@ def check_level_up():
             player.fighter.max_hp += 20
             player.fighter.hp += 20
         elif choice == 1:
-            player.fighter.power += 1
+            player.fighter.base_power += 1
         elif choice == 2:
             player.fighter.defense += 1
 
@@ -787,7 +870,12 @@ def inventory_menu(header):
     if len(inventory) == 0:
         options = ['Inventory is empty.']
     else:
-        options = [item.name for item in inventory]
+        options = []
+        for item in inventory:
+            text = item.name
+            if item.equipment and item.equipment.is_equipped:
+                text = text + ' (on ' + item.equipment.slot + ')'
+            options.append(text)
  
     index = menu(header, options, INVENTORY_WIDTH)
  
@@ -817,6 +905,13 @@ def new_game():
     inventory = []
 
     game_msgs = []
+
+    equipment_component = Equipment(slot='right hand', power_bonus=2)
+    obj = Object(0, 0, '-', 'dagger', libtcod.sky, equipment=equipment_component)
+    inventory.append(obj)
+    equipment_component.equip()
+    obj.always_visible = True
+
     message('Welcome stranger! Prepare to perish in Rise of the Dead.', libtcod.red) 
 
 def save_game():
@@ -919,5 +1014,6 @@ libtcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'python/libtcod tutorial'
 libtcod.sys_set_fps(LIMIT_FPS)
 con = libtcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 panel = libtcod.console_new(SCREEN_WIDTH, PANEL_HEIGHT)
+logging.basicConfig(level='DEBUG')
 
 main_menu()
