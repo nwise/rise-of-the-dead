@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import libtcodpy as libtcod
 import shelve
 import math
@@ -47,7 +48,7 @@ ROOM_MIN_SIZE = 6
 MAX_ROOMS = 30
 
 MAX_ROOM_MONSTERS = 3
-MAX_ROOM_ITEMS = 2
+MAX_ROOM_ITEMS = 1
 
 FOV_ALGO = 0
 FOV_LIGHT_WALLS = True
@@ -90,7 +91,7 @@ class Object:
  
     def move(self, dx, dy):
         #move by the given amount, if the destination is not blocked
-        if not is_blocked(self.x + dx, self.y + dy):
+        if not is_blocked(self.x + dx, self.y + dy) or self.name == 'Ghost':
             self.x += dx
             self.y += dy
  
@@ -104,7 +105,27 @@ class Object:
         #convert to integer so the movement is restricted to the map grid
         dx = int(round(dx / distance))
         dy = int(round(dy / distance))
-        self.move(dx, dy)
+
+        dest_x = dx + self.x
+        dest_y = dy + self.y
+
+        if not is_blocked(dest_x, dest_y):
+            self.move(dx, dy)
+        else:
+            if is_blocked(dest_x, self.y) and (self.x != dest_x):
+                if dy != 0:
+                    self.move(0, dy)
+                elif target_y < self.y:
+                    self.move(0, dy-1)
+                elif target_y > self.y:
+                    self.move(0, dy+1)
+            else:
+                if dx != 0:
+                    self.move(dx, 0)
+                elif target_x < self.x:
+                    self.move(dx-1, 0)
+                elif target_x > self.x:
+                    self.move(dx+1, 0)
  
     def distance_to(self, other):
         #return the distance to another object
@@ -334,20 +355,20 @@ def place_objects(room):
  
     #chance of each monster
     monster_chances = {}
-    monster_chances['zombie'] = 80  #orc always shows up, even if all other monsters have 0 chance
+    monster_chances['zombie'] = 80
     monster_chances['ghost'] = from_dungeon_level([[15, 3], [30, 5], [60, 7]])
  
     #maximum number of items per room
-    max_items = from_dungeon_level([[1, 1], [2, 4]])
+    max_items = from_dungeon_level([[1, 1], [2, 4], [3, 6]])
  
     #chance of each item (by default they have a chance of 0 at level 1, which then goes up)
     item_chances = {}
-    item_chances['heal'] = 35  #healing potion always shows up, even if all other items have 0 chance
-    item_chances['lightning'] = from_dungeon_level([[25, 4]])
-    item_chances['fireball'] = from_dungeon_level([[25, 6]])
-    item_chances['confuse'] = from_dungeon_level([[10, 2]])
+    item_chances['heal'] = 20  #healing potion always shows up, even if all other items have 0 chance
+    item_chances['confuse'] = from_dungeon_level([[5, 2]])
     item_chances['sword'] = from_dungeon_level([[5, 4]])
-    item_chances['shield'] = from_dungeon_level([[15, 8]])
+    item_chances['fireball'] = from_dungeon_level([[5, 4]])
+    item_chances['lightning'] = from_dungeon_level([[25, 6]])
+    item_chances['fireball'] = from_dungeon_level([[25, 8]])
 
     #choose random number of monsters
     num_monsters = libtcod.random_get_int(0, 0, max_monsters)
@@ -358,14 +379,15 @@ def place_objects(room):
 
         #only place it if the tile is not blocked
         if not is_blocked(x, y):
-            if random_choice(monster_chances):
-                fighter_component = Fighter(hp=8, defense=0, power=3, xp=30, death_function=monster_death)
+            choice = random_choice(monster_chances)
+            if choice == 'zombie':
+                fighter_component = Fighter(hp=10, defense=0, power=4, xp=30, death_function=monster_death)
                 ai_component = BasicMonster()
  
                 monster = Object(x, y, 'Z', 'Zombie', libtcod.desaturated_green,
                     blocks=True, fighter=fighter_component, ai=ai_component)
-            else:
-                fighter_component = Fighter(hp=4, defense=1, power=4, xp=100, death_function=monster_death)
+            elif choice == 'ghost':
+                fighter_component = Fighter(hp=5, defense=1, power=8, xp=100, death_function=monster_death)
                 ai_component = BasicMonster()
  
                 monster = Object(x, y, 'G', 'Ghost', libtcod.darker_green,
@@ -384,11 +406,12 @@ def place_objects(room):
         #only place it if the tile is not blocked
         if not is_blocked(x, y):
             choice = random_choice(item_chances)
+            logging.debug(choice)
             if choice == 'heal':
                 #create a healing potion
                 item_component = Item(use_function=cast_heal)
                 item = Object(x, y, '!', 'healing potion', libtcod.violet, item=item_component)
-            elif choice == 'ligthning':
+            elif choice == 'lightning':
                 item_component = Item(use_function=cast_lightning)
                 item = Object(x, y, '#', 'scroll of lightning', libtcod.light_yellow, item=item_component)
             elif choice == 'fireball':
@@ -482,8 +505,13 @@ def next_level():
     global dungeon_level
 
     dungeon_level += 1
+    if dungeon_level > 10:
+        win_screen()
+        os.remove('savegame.db')
+        main_menu()
+
     message('You take a moment to rest and regain your strength.', libtcod.white)
-    player.fighter.heal(player.fighter.max_hp / 2)
+    player.fighter.heal(10)
 
     message('After a rare moment of peace, you descend deeper into the dungeon...', libtcod.red)
     make_map()
@@ -595,6 +623,8 @@ def handle_keys():
             player_move_or_attack(-1, 0)
         elif key.vk == libtcod.KEY_RIGHT:
             player_move_or_attack(1, 0)
+        elif key.vk == libtcod.KEY_SPACE:
+            player_move_or_attack(0, 0)
         else:
             #test for other keys
             key_char = chr(key.c)
@@ -604,6 +634,19 @@ def handle_keys():
                 chosen_item = inventory_menu('Press the key next to an item to use it, or any other to cancel.\n')
                 if chosen_item is not None:
                     chosen_item.use()
+
+            if key_char == 'h':
+                msgbox(
+                  "Move Up:    " + chr(24) + "\n" +
+                  "Move Left:  " + chr(27) + "\n" +
+                  "Move Right: " + chr(26) + "\n" +
+                  "Move Down:  " + chr(25) + "\n" +
+                  "Wait:       SPACE\n" +
+                  'Character:  c\n' +
+                  'Inventory:  i\n' +
+                  'Grab Item:  g\n' +
+                  'Drop Item:  d'
+                )
  
             if key_char == 'g':
                 #pick up an item
@@ -640,13 +683,13 @@ def check_level_up():
         choice = None
         while choice == None:  #keep asking until a choice is made
             choice = menu('Level up! Choose a stat to raise:\n',
-                ['Constitution (+20 HP, from ' + str(player.fighter.max_hp) + ')',
+                ['Constitution (+10 HP, from ' + str(player.fighter.max_hp) + ')',
                 'Strength (+1 attack, from ' + str(player.fighter.power) + ')',
                 'Agility (+1 defense, from ' + str(player.fighter.defense) + ')'], LEVEL_SCREEN_WIDTH)
  
         if choice == 0:
-            player.fighter.max_hp += 20
-            player.fighter.hp += 20
+            player.fighter.max_hp += 10
+            player.fighter.hp += 10
         elif choice == 1:
             player.fighter.base_power += 1
         elif choice == 2:
@@ -981,6 +1024,9 @@ def play_game():
             for object in objects:
                if object.ai:
                    object.ai.take_turn() 
+
+def win_screen():
+    libtcod.console_print_ex(0, SCREEN_WIDTH/2, SCREEN_HEIGHT/2-4, libtcod.BKGND_NONE, libtcod.CENTER, 'YOU WIN!')
 
 def main_menu():
     img = libtcod.image_load('menu_background1.png')
