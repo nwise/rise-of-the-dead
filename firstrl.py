@@ -381,7 +381,7 @@ def place_objects(room):
         if not is_blocked(x, y):
             choice = random_choice(monster_chances)
             if choice == 'zombie':
-                fighter_component = Fighter(hp=10, defense=0, power=4, xp=30, death_function=monster_death)
+                fighter_component = Fighter(hp=10, defense=0, power=2, xp=30, death_function=monster_death)
                 ai_component = BasicMonster()
  
                 monster = Object(x, y, 'Z', 'Zombie', libtcod.desaturated_green,
