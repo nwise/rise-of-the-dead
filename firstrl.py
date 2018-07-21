@@ -934,7 +934,7 @@ def new_game():
 
     #create object representing the player
     fighter_component = Fighter(hp=30, defense=2, power=5, xp=0, death_function=player_death)
-    player = Object(SCREEN_WIDTH//2, SCREEN_HEIGHT//2, '@', 'Player', libtcod.white, blocks=True, fighter=fighter_component)
+    player = Object(SCREEN_WIDTH//2, SCREEN_HEIGHT//2, '@', 'You', libtcod.white, blocks=True, fighter=fighter_component)
 
     player.level = 1
 
@@ -955,7 +955,7 @@ def new_game():
     equipment_component.equip()
     obj.always_visible = True
 
-    message('Welcome stranger! Prepare to perish in Rise of the Dead.', libtcod.red) 
+    message('Welcome stranger! Prepare to perish in Rise of the Dead! mwahahahaha!', libtcod.red) 
 
 def save_game():
     file = shelve.open('savegame', 'n')
